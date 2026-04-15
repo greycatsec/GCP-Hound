@@ -189,6 +189,14 @@
       "is_display_kind": true,
       "icon": "broadcast-tower",
       "color": "#607D8B"
+    },
+    {
+      "name": "GCP_Resource",
+      "display_name": "GCP Resource",
+      "description": "Base tag kind applied to all GCP resource nodes. Enables broad queries across every GCP node type (e.g. MATCH (n:GCP_Resource)).",
+      "is_display_kind": false,
+      "icon": "cloud",
+      "color": "#4285F4"
     }
   ],
   "relationship_kinds": [

@@ -418,7 +418,7 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
             # FIXED: Only 2 kinds maximum
             gmsa_node = Node(
                 id=gmsa_email,
-                kinds=["GCP_GoogleManagedSA"],
+                kinds=["GCP_GoogleManagedSA", "GCP_Resource"],
                 properties=Properties(**sanitized_properties)
             )
             graph.add_node(gmsa_node)
@@ -462,7 +462,7 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
             # FIXED: Only 2 kinds maximum
             user_node = Node(
                 id=user_email,
-                kinds=["GCP_User"],
+                kinds=["GCP_User", "GCP_Resource"],
                 properties=Properties(**sanitized_properties)
             )
             graph.add_node(user_node)
@@ -522,7 +522,7 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
         # FIXED: Only 2 kinds maximum
         sa_node = Node(
             id=sa_email,
-            kinds=["GCP_ServiceAccount"],
+            kinds=["GCP_ServiceAccount", "GCP_Resource"],
             properties=Properties(**sanitized_properties)
         )
         graph.add_node(sa_node)
@@ -572,7 +572,7 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
         # FIXED: Only 2 kinds maximum
         proj_node = Node(
             id=project_id,
-            kinds=["GCP_Project"],
+            kinds=["GCP_Project", "GCP_Resource"],
             properties=Properties(**sanitized_properties)
         )
         graph.add_node(proj_node)
@@ -621,7 +621,7 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
         # FIXED: Only 2 kinds maximum
         bucket_node = Node(
             id=bucket_name,
-            kinds=["GCP_Bucket"],
+            kinds=["GCP_Bucket", "GCP_Resource"],
             properties=Properties(**sanitized_properties)
         )
         graph.add_node(bucket_node)
@@ -670,7 +670,7 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
         # Create node with canonical ID - FIXED: Only 2 kinds maximum
         bq_node = Node(
             id=canonical_dataset_id,
-            kinds=["GCP_Dataset"],
+            kinds=["GCP_Dataset", "GCP_Resource"],
             properties=Properties(**sanitized_properties)
         )
         graph.add_node(bq_node)
@@ -727,7 +727,7 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
         # Use GCPLogSink kind for UI compatibility - FIXED: Only 2 kinds maximum
         sink_node = Node(
             id=sink_id,
-            kinds=["GCP_LogSink"],
+            kinds=["GCP_LogSink", "GCP_Resource"],
             properties=Properties(**sanitized_properties)
         )
         graph.add_node(sink_node)
@@ -773,7 +773,7 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
         # FIXED: Only 2 kinds maximum
         log_bucket_node = Node(
             id=bucket_id,
-            kinds=["GCP_LogBucket"],
+            kinds=["GCP_LogBucket", "GCP_Resource"],
             properties=Properties(**sanitized_properties)
         )
         graph.add_node(log_bucket_node)
@@ -817,7 +817,7 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
         # FIXED: Only 2 kinds maximum
         metric_node = Node(
             id=metric_id,
-            kinds=["GCP_LogMetric"],
+            kinds=["GCP_LogMetric", "GCP_Resource"],
             properties=Properties(**sanitized_properties)
         )
         graph.add_node(metric_node)
@@ -876,7 +876,7 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
         # FIXED: Only 2 kinds maximum
         user_node = Node(
             id=current_user,
-            kinds=["GCP_User"],
+            kinds=["GCP_User", "GCP_Resource"],
             properties=Properties(**sanitized_properties)
         )
         graph.add_node(user_node)
@@ -1054,7 +1054,7 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
             service_match = re.search(r"@gcp-sa-([a-z0-9\-]+)\.", node_id)
             service_name = service_match.group(1) if service_match else "unknown"
             return (
-                ["GCP_GoogleManagedSA"],
+                ["GCP_GoogleManagedSA", "GCP_Resource"],
                 f"Google-managed {service_name.replace('-', ' ').title()} Service Account"
             )
         
@@ -1065,7 +1065,7 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
             if service_match:
                 service_name = service_match.group(1).replace('-', ' ').title()
                 return (
-                    ["GCP_GoogleManagedSA"],
+                    ["GCP_GoogleManagedSA", "GCP_Resource"],
                     f"Google {service_name} Service Robot"
                 )
         
@@ -1076,19 +1076,19 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
             if node_id.startswith("user-"):
                 sa_name = node_id.split("@")[0].replace("user-", "")
                 return (
-                    ["GCP_ServiceAccount"],
+                    ["GCP_ServiceAccount", "GCP_Resource"],
                     f"Service Account: {sa_name}"
                 )
             else:
                 return (
-                    ["GCP_ServiceAccount"],
+                    ["GCP_ServiceAccount", "GCP_Resource"],
                     "GCP Service Account"
                 )
         
         # GCP User (has @ but NOT a service account)
         if "@" in node_id and "gserviceaccount.com" not in node_id:
             return (
-                ["GCP_User"],
+                ["GCP_User", "GCP_Resource"],
                 f"GCP User: {node_id}"
             )
         
@@ -1096,48 +1096,48 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
         if node_id.startswith("gcp-project-"):
             project_id = node_id.replace("gcp-project-", "")
             return (
-                ["GCP_Project"],
+                ["GCP_Project", "GCP_Resource"],
                 f"GCP Project: {project_id}"
             )
         
         # Regular project ID pattern (lowercase alphanumeric with hyphens, 6-30 chars)
         if re.match(r"^[a-z][a-z0-9\-]{5,30}$", node_id) and ":" not in node_id:
             return (
-                ["GCP_Project"],
+                ["GCP_Project", "GCP_Resource"],
                 f"GCP Project: {node_id}"
             )
         
         # Log sink/stream
         if "logstream:" in node_id or "sink:" in node_id:
             return (
-                ["GCP_LogSink"],
+                ["GCP_LogSink", "GCP_Resource"],
                 f"Log Stream: {node_id.split(':')[-1]}"
             )
         
         # Log bucket
         if "bucket:" in node_id and ("_Default" in node_id or "_Required" in node_id):
             return (
-                ["GCP_LogBucket"],
+                ["GCP_LogBucket", "GCP_Resource"],
                 f"Log Bucket: {node_id.split(':')[-1]}"
             )
         
         # Storage bucket (ends with .app or .appspot.com)
         if node_id.endswith(".app") or node_id.endswith(".appspot.com"):
             return (
-                ["GCP_Bucket"],
+                ["GCP_Bucket", "GCP_Resource"],
                 f"Storage Bucket: {node_id}"
             )
         
         # Dataset (has gcp-bq-dataset prefix or contains dataset keyword)
         if node_id.startswith("gcp-bq-dataset-") or "dataset" in node_id.lower():
             return (
-                ["GCP_Dataset"],
+                ["GCP_Dataset", "GCP_Resource"],
                 f"BigQuery Dataset: {node_id}"
             )
         
         # Fallback - generic resource
         return (
-            ["GCP_ServiceAccount"],
+            ["GCP_ServiceAccount", "GCP_Resource"],
             f"GCP Resource: {node_id}"
         )
     
@@ -1151,13 +1151,13 @@ def export_bloodhound_json(computers, users, projects, groups, service_accounts,
 
                 # OLD LOGIC (kept for reference)
                 # if "@gserviceaccount.com" in node_id:
-                #     kinds = ["GCP_ServiceAccount"]
+                #     kinds = ["GCP_ServiceAccount", "GCP_Resource"]
                 #     desc = "Auto-created service account node (missing from data)"
                 # elif "logstream:" in node_id or "sink:" in node_id:
-                #     kinds = ["GCP_LogSink"]
+                #     kinds = ["GCP_LogSink", "GCP_Resource"]
                 #     desc = "Auto-created log stream node (missing from data)"
                 # else:
-                #     kinds = ["GCP_ServiceAccount"]
+                #     kinds = ["GCP_ServiceAccount", "GCP_Resource"]
                 #     desc = "Auto-created node (missing from data)"
                 # Create node with minimal properties
                 graph.add_node(Node(

@@ -3,12 +3,19 @@ from utils.id_utils import normalize_dataset_id
 
 def safe_add_edge(edges, start_id, end_id, kind, properties):
     """
-    Safely add an edge to edges list with validation of node IDs.
-    Prevents "Node ID cannot be empty" errors by validating before creation.
+    Safely add an edge to edges list with validation of node IDs
+    Prevents "Node ID cannot be empty" errors by validating before creation
     """
-    if not start_id or not str(start_id).strip():
+    # Validate start_id
+    if not start_id:
         return False
-    if not end_id or not str(end_id).strip():
+    if not str(start_id).strip():
+        return False
+        
+    # Validate end_id  
+    if not end_id:
+        return False
+    if not str(end_id).strip():
         return False
 
     edge = {
@@ -34,29 +41,37 @@ def build_edges(projects, iam_data, users, service_accounts, buckets, secrets, b
 
     print(f"[*] Edge Builder: Processing {len(projects)} projects, {len(iam_data)} IAM policies")
 
+    
+    # Print BigQuery datasets info if available
     if bigquery_datasets:
         print(f"[*] Edge Builder: Including {len(bigquery_datasets)} BigQuery datasets")
 
+    # Build edges from IAM bindings with validation
     iam_edges = build_iam_binding_edges(iam_data, projects, debug)
     edges.extend(iam_edges)
     stats["created"] += len(iam_edges)
 
+    # Build service account containment and privilege analysis edges
     sa_edges = build_service_account_edges(service_accounts, projects, iam_data, debug)
     edges.extend(sa_edges)
     stats["created"] += len(sa_edges)
 
+    # Build resource ownership edges (now includes BigQuery datasets)
     resource_edges = build_resource_ownership_edges(projects, buckets, secrets, service_accounts, bigquery_datasets, debug)
     edges.extend(resource_edges)
     stats["created"] += len(resource_edges)
 
+    # Build privilege escalation edges with strict permission separation
     privesc_edges = build_privilege_escalation_edges(iam_data, service_accounts, secrets, debug)
     edges.extend(privesc_edges)
     stats["created"] += len(privesc_edges)
 
     print(f"[+] Edge Builder: Created {len(edges)} attack relationship edges")
+    print(f"[+] Edge validation prevented invalid edges from being created")
     return edges
 
 
+# NEW: Service account permission edge building function
 def build_service_account_permission_edges(service_account_permissions, debug=False):
     """
     Build edges from service account IAM permission analysis.
@@ -121,34 +136,41 @@ def build_service_account_permission_edges(service_account_permissions, debug=Fa
 
 def determine_sa_permission_edge_type(role):
     """
-    Determine GCP_-prefixed edge type and risk level from IAM role for SA permissions.
+    Determine edge type and risk level from GCP IAM role for service account permissions.
     Returns (edge_type, risk_level) tuple.
     """
     role_lower = role.lower()
-
+    
+    # Service Account User role
     if 'serviceaccountuser' in role_lower or 'iam.serviceaccounts.actas' in role_lower:
         return 'GCP_CanImpersonate', 'HIGH'
-
+    
+    # Service Account Key Admin roles
     if 'serviceaccountkeyAdmin' in role_lower or 'iam.serviceaccountkeys.create' in role_lower:
         return 'GCP_CanCreateKeys', 'CRITICAL'
-
+    
+    # Service Account Admin role
     if 'serviceaccountadmin' in role_lower or 'iam.serviceaccounts.setiampolicy' in role_lower:
         return 'GCP_CanManageSA', 'HIGH'
-
+    
+    # Token Creator role  
     if 'serviceaccounttokencreator' in role_lower or 'iam.serviceaccounts.getaccesstoken' in role_lower:
         return 'GCP_CanGetAccessToken', 'HIGH'
-
+    
+    # Owner and Editor roles (broad permissions)
     if role_lower == 'roles/owner':
         return 'GCP_CanManageSA', 'CRITICAL'
     elif role_lower == 'roles/editor':
         return 'GCP_CanImpersonate', 'HIGH'
-
+    
+    # IAM Security Admin
     if 'iam.securityadmin' in role_lower:
         return 'GCP_CanManageSA', 'CRITICAL'
 
     return None, None
 
 
+# All your existing functions remain unchanged below...
 def get_sa_roles_from_iam(sa_email, iam_data):
     """Extract actual roles assigned to service account from IAM data"""
     sa_roles = []
@@ -183,7 +205,7 @@ def analyze_sa_actual_privileges(sa_email, iam_data):
 
 
 def get_privilege_reason(sa_email, iam_data):
-    """Get human-readable reason for SA privilege level"""
+    """Get human-readable reason why service account is considered high-privilege"""
     roles = get_sa_roles_from_iam(sa_email, iam_data)
     critical_roles = [r for r in roles if r in ['roles/owner', 'roles/iam.securityAdmin']]
     admin_roles = [r for r in roles if 'admin' in r.lower()]
@@ -210,6 +232,8 @@ def build_service_account_edges(service_accounts, projects, iam_data=None, debug
         project_id = sa.get('project', '').lower()
 
         if not sa_email or not project_id:
+            if debug:
+                print(f"[DEBUG] Skipping SA with missing email/project: {sa}")
             edges_skipped += 1
             continue
 
@@ -229,10 +253,14 @@ def build_service_account_edges(service_accounts, projects, iam_data=None, debug
         )
         if success:
             edges_created += 1
+            if debug:
+                print(f"[DEBUG] ✅ Containment edge: {project_id} -> {sa_email}")
         else:
             edges_skipped += 1
 
-        # Traversable high-privilege edge (SA → Project)
+        # Dynamic privilege analysis based on actual IAM roles
+
+        # Only create high-privilege edge if actually high-privileged
         actual_privilege_level = analyze_sa_actual_privileges(sa_email, iam_data)
         if actual_privilege_level in ['CRITICAL', 'HIGH']:
             success = safe_add_edge(
@@ -250,37 +278,46 @@ def build_service_account_edges(service_accounts, projects, iam_data=None, debug
             )
             if success:
                 edges_created += 1
+                if debug:
+                    print(f"[DEBUG] ✅ High privilege edge: {sa_email} -> {project_id} ({actual_privilege_level})")
             else:
                 edges_skipped += 1
 
-    print(f"[+] Built {edges_created} service account edges")
+    print(f"[+] Built {edges_created} service account edges (privilege analysis: {'IAM-based' if iam_data else 'limited'})")
     if edges_skipped > 0:
         print(f"[WARNING] Skipped {edges_skipped} invalid service account edges")
     return edges
 
 
 def determine_enhanced_edge_kind_from_role(role):
-    """Map GCP IAM role to GCP_-prefixed edge kind for IAM binding edges"""
+    """Map role to enhanced edge kind for IAM edges"""
     role_lower = role.lower()
 
+    # Only roles/owner gets OwnsProject
     if role_lower == 'roles/owner':
         return 'GCP_OwnsProject'
+    # Only actual IAM management roles get ManageProjectIAM
     if role_lower in ['roles/resourcemanager.projectiamadmin', 'roles/iam.securityadmin', 'roles/iam.organizationadmin']:
         return 'GCP_ManageProjectIAM'
+    # Core project roles
     if role_lower == 'roles/editor':
         return 'GCP_CanEditProject'
     if role_lower in ['roles/viewer', 'roles/browser']:
         return 'GCP_CanViewProject'
+    # Service-specific admin roles (only if truly admin)
     if role_lower.startswith('roles/compute.') and 'admin' in role_lower:
         return 'GCP_ManageProjectCompute'
     if role_lower.startswith('roles/storage.') and 'admin' in role_lower:
         return 'GCP_ManageProjectStorage'
     if role_lower.startswith('roles/bigquery.') and 'admin' in role_lower:
         return 'GCP_ManageProjectBigQuery'
+    # Service-scoped roles should NOT imply project administration
     if role_lower.startswith(('roles/datastore.', 'roles/firebase.', 'roles/firebaseauth.', 'roles/firebasedatabase.')):
         return 'GCP_HasRoleOnProject'
+    # Generic admin (only after service-specific checks)
     if 'admin' in role_lower and not any(x in role_lower for x in ['datastore', 'firebase']):
         return 'GCP_AdministerProject'
+    # Default for all other roles
     return 'GCP_HasRoleOnProject'
 
 
@@ -299,7 +336,7 @@ def get_attack_surface_for_role(role):
 
 
 def determine_risk_level_from_role(role):
-    """Determine risk level from GCP role"""
+    """Determine risk level from GCP role with enhanced granularity"""
     role_lower = role.lower()
     if any(critical in role_lower for critical in ['owner', 'securityadmin', 'iam.admin']):
         return 'CRITICAL'
@@ -314,7 +351,7 @@ def determine_risk_level_from_role(role):
 
 
 def build_iam_binding_edges(iam_data, projects, debug=False):
-    """Build edges from IAM policy bindings using GCP_-prefixed edge kinds"""
+    """Build edges from IAM policy bindings with role-to-edge mapping"""
     edges = []
     edges_created = 0
     edges_skipped = 0
@@ -368,11 +405,12 @@ def build_iam_binding_edges(iam_data, projects, debug=False):
 
 
 def build_resource_ownership_edges(projects, buckets, secrets, service_accounts, bigquery_datasets=None, debug=False):
-    """Build resource ownership edges using GCP_-prefixed edge kinds"""
+    """Build resource ownership edges with validation - NOW INCLUDES BIGQUERY DATASETS"""
     edges = []
     edges_created = 0
     edges_skipped = 0
 
+    # Existing bucket logic
     for bucket in buckets:
         bucket_name = bucket.get('name', '').lower()
         project_id = bucket.get('project', '').lower()
@@ -397,9 +435,12 @@ def build_resource_ownership_edges(projects, buckets, secrets, service_accounts,
             )
             if success:
                 edges_created += 1
+                if debug:
+                    print(f"[DEBUG] ✅ Bucket ownership: {project_id} -> {bucket_name}")
             else:
                 edges_skipped += 1
 
+    # Existing secrets logic
     for secret in secrets:
         secret_name = secret.get('name', '').lower()
         project_id = secret.get('project', '').lower()
@@ -413,19 +454,24 @@ def build_resource_ownership_edges(projects, buckets, secrets, service_accounts,
                     "source": "resource_ownership",
                     "resourcetype": "Secret",
                     "risklevel": "HIGH",
+                    "encryptionStatus": "Google-managed",
                     "description": f"Project {project_id} owns secret {secret_name}"
                 }
             )
             if success:
                 edges_created += 1
+                if debug:
+                    print(f"[DEBUG] ✅ Secret ownership: {project_id} -> {secret_name}")
             else:
                 edges_skipped += 1
 
+    # BigQuery dataset logic
     if bigquery_datasets:
         for dataset in bigquery_datasets:
             dataset_id = dataset.get('dataset_id', '')
             project_id = dataset.get('project', '').lower()
             if dataset_id and project_id:
+                # Use the SAME ID format your json_builder uses for dataset nodes
                 canonical_dataset_id = normalize_dataset_id(dataset_id, project_id)
                 success = safe_add_edge(
                     edges=edges,
@@ -438,11 +484,14 @@ def build_resource_ownership_edges(projects, buckets, secrets, service_accounts,
                         "risklevel": dataset.get('riskLevel', 'MEDIUM'),
                         "tablecount": dataset.get('table_count', 0),
                         "location": dataset.get('location', 'Unknown'),
+                        "fullDatasetId": dataset.get('full_dataset_id', f"{project_id}:{dataset_id}"),
                         "description": f"Project {project_id} owns BigQuery dataset {canonical_dataset_id}"
                     }
                 )
                 if success:
                     edges_created += 1
+                    if debug:
+                        print(f"[DEBUG] ✅ Dataset ownership: {project_id} -> {canonical_dataset_id}")
                 else:
                     edges_skipped += 1
 
@@ -453,34 +502,30 @@ def build_resource_ownership_edges(projects, buckets, secrets, service_accounts,
 
 
 def get_enhanced_permissions_for_role(role):
-    """Get permissions contained in a GCP role for privilege escalation analysis"""
+    """Get comprehensive permissions contained in a GCP role"""
     role_permissions = {
         'roles/owner': [
             'iam.serviceAccounts.actAs', 'iam.serviceAccountKeys.create',
-            'iam.serviceAccounts.signBlob', 'iam.serviceAccounts.signJwt',
+            'iam.serviceAccounts.signBlob', 'iam.serviceAccounts.signJwt', #added for sigining blob and jwt
             'compute.instances.create', 'cloudfunctions.functions.create',
-            'resourcemanager.projects.setIamPolicy', 'storage.buckets.setIamPolicy',
-            'secretmanager.secrets.get', 'secretmanager.versions.access'
+            'resourcemanager.projects.setIamPolicy', 'storage.buckets.setIamPolicy'
+            'secretmanager.secrets.get', 'secretmanager.versions.access'# added for secrets enumeration
         ],
         'roles/editor': [
             'iam.serviceAccounts.actAs',
-            'iam.serviceAccounts.signBlob', 'iam.serviceAccounts.signJwt',
+            'iam.serviceAccounts.signBlob', 'iam.serviceAccounts.signJwt', #added for sigining blob and jwt
             'compute.instances.create',
             'cloudfunctions.functions.create', 'compute.instances.setServiceAccount'
         ],
-        'roles/iam.serviceAccountTokenCreator': [
-            'iam.serviceAccounts.getAccessToken',
-            'iam.serviceAccounts.signBlob',
-            'iam.serviceAccounts.signJwt'
-        ],
+        'roles/iam.serviceAccountTokenCreator': ['iam.serviceAccounts.getAccessToken', 'iam.serviceAccounts.signBlob', 'iam.serviceAccounts.signJwt'], #added for sigining blob and jwt
         'roles/iam.serviceAccountUser': ['iam.serviceAccounts.actAs'],
         'roles/iam.serviceAccountKeyAdmin': ['iam.serviceAccountKeys.create', 'iam.serviceAccountKeys.get'],
         'roles/iam.securityAdmin': ['iam.serviceAccounts.actAs', 'resourcemanager.projects.setIamPolicy'],
         'roles/compute.admin': ['compute.instances.create', 'compute.instances.setServiceAccount'],
         'roles/storage.admin': ['storage.buckets.setIamPolicy'],
         'roles/deploymentmanager.editor': ['deploymentmanager.deployments.create'],
-        'roles/secretmanager.secretAccessor': ['secretmanager.versions.access'],
-        'roles/secretmanager.admin': ['secretmanager.secrets.get', 'secretmanager.versions.access']
+        'roles/secretmanager.secretAccessor': ['secretmanager.versions.access'],# added for secrets enumeration
+        'roles/secretmanager.admin': ['secretmanager.secrets.get', 'secretmanager.versions.access']# added for secrets enumeration
     }
     return role_permissions.get(role, [])
 
@@ -489,12 +534,12 @@ def get_escalation_risk_level(permission):
     critical_perms = [
         'iam.serviceAccounts.actAs', 'iam.serviceAccountKeys.create',
         'resourcemanager.projects.setIamPolicy', 'storage.buckets.setIamPolicy',
-        'secretmanager.versions.access'
+        'secretmanager.versions.access'# added for secrets permission
     ]
     high_perms = [
         'compute.instances.create', 'cloudfunctions.functions.create',
         'compute.instances.setServiceAccount', 'cloudfunctions.functions.sourceCodeSet',
-        'secretmanager.secrets.get'
+        'secretmanager.secrets.get'# added for secrets permission
     ]
     if permission in critical_perms:
         return 'CRITICAL'
@@ -518,14 +563,14 @@ def get_attack_vector_for_permission(permission):
         'cloudfunctions.functions.create': 'Serverless Code Execution',
         'resourcemanager.projects.setIamPolicy': 'Project Policy Takeover',
         'storage.buckets.setIamPolicy': 'Bucket Policy Manipulation',
-        'secretmanager.versions.access': 'Secret Value Access',
-        'secretmanager.secrets.get': 'Secret Metadata Access'
+        'secretmanager.versions.access': 'Secret Value Access',# added for secrets permission
+        'secretmanager.secrets.get': 'Secret Metadata Access'# added for secrets permission
     }
     return attack_vectors.get(permission, 'Resource Manipulation')
 
 
 def get_mitre_technique_for_permission(permission):
-    """Map GCP permissions to MITRE ATT&CK techniques"""
+    """Map GCP permissions to MITRE ATT&CK techniques (experimental for now, will work on enhancement later)"""
     mitre_mapping = {
         'iam.serviceAccounts.actAs': 'T1078.004',
         'iam.serviceAccounts.getAccessToken': 'T1078.004',
@@ -547,23 +592,12 @@ def clean_member_id(member):
 
 
 def build_privilege_escalation_edges(iam_data, service_accounts, secrets=None, debug=False):
-    """
-    Build privilege escalation edges using GCP_-prefixed edge kinds.
-
-    Traversable edges (source fully controls destination):
-      - GCP_CanImpersonate, GCP_CanCreateKeys, GCP_CanGetAccessToken,
-        GCP_CanModifyIamPolicy, GCP_CanModifyProjectPolicy, GCP_CanReadSecrets
-
-    Non-traversable edges (partial capability / wrong destination node):
-      - GCP_CanSignBlob, GCP_CanSignJWT (supporting edges — partial SA capability)
-      - GCP_CanCreateComputeInstance, GCP_CanCreateCloudFunction,
-        GCP_CanChangeInstanceServiceAccount (destination is project, not the SA)
-      - GCP_CanModifyBucketPoliciesInProject, GCP_CanReadSecretsInProject (project-wide)
-    """
+    """Build privilege escalation edges with strict SA-to-SA and SA-to-Project separation"""
     edges = []
     edges_created = 0
     edges_skipped = 0
 
+    # Map service accounts by project for target resolution
     sa_by_project = {}
     for sa in service_accounts:
         project_id = sa.get('project', '').lower()
@@ -571,10 +605,9 @@ def build_privilege_escalation_edges(iam_data, service_accounts, secrets=None, d
         if project_id and sa_email:
             sa_by_project.setdefault(project_id, []).append(sa_email)
 
-    # SA-scoped permissions → edges to the target SA
-    # Traversable: actAs, createKeys, getAccessToken, setIamPolicy
-    # Non-traversable: signBlob, signJwt (partial capability — supporting edges only)
+    # Permissions that operate on SERVICE ACCOUNTS - create SA->SA edges
     sa_scoped_permissions = {
+
         'iam.serviceAccounts.actAs':          'GCP_CanImpersonate',        # traversable
         'iam.serviceAccounts.getAccessToken': 'GCP_CanGetAccessToken',     # traversable
         'iam.serviceAccounts.setIamPolicy':   'GCP_CanModifyIamPolicy',    # traversable
@@ -583,23 +616,20 @@ def build_privilege_escalation_edges(iam_data, service_accounts, secrets=None, d
         'iam.serviceAccounts.signJwt':         'GCP_CanSignJWT',            # non-traversable
     }
 
-    # Secret-scoped permissions → edges to the secret
-    # Traversable: versions.access (reads the actual secret value)
-    # Non-traversable: secrets.get (metadata only)
-    secret_scoped_permissions = {
-        'secretmanager.versions.access': 'GCP_CanReadSecrets',         # traversable
-        'secretmanager.secrets.get':     'GCP_CanReadSecretMetadata'   # non-traversable
+    secret_scoped_permissions = {# NEW DICTIONARY
+    'secretmanager.versions.access': 'GCP_CanReadSecrets',
+    'secretmanager.secrets.get': 'GCP_CanReadSecretMetadata'
     }
 
-    # Project-scoped permissions → edges to the project
-    # All non-traversable: destination is the project, actual escalation target is the SA
+    # Permissions that operate on PROJECTS - create SA->Project edges
     project_scoped_permissions = {
         'compute.instances.create':                 'GCP_CanCreateComputeInstance',
         'compute.instances.setServiceAccount':       'GCP_CanChangeInstanceServiceAccount',
         'cloudfunctions.functions.create':           'GCP_CanCreateCloudFunction',
         'resourcemanager.projects.setIamPolicy':     'GCP_CanModifyProjectPolicy',  # traversable
+        #'storage.buckets.setIamPolicy': 'CanModifyBucketPolicy'
         'storage.buckets.setIamPolicy':              'GCP_CanModifyBucketPoliciesInProject',
-        'secretmanager.versions.access':             'GCP_CanReadSecretsInProject'
+        'secretmanager.versions.access':             'GCP_CanReadSecretsInProject'# added for read secrets permissions
     }
 
     for iam_policy in iam_data:
@@ -702,7 +732,7 @@ def build_privilege_escalation_edges(iam_data, service_accounts, secrets=None, d
 
 
 def validate_edges_post_build(edges, debug=False):
-    """Post-build validation of edges"""
+    """Post-build validation of edges for debugging"""
     valid_edges = 0
     invalid_edges = 0
     for edge in edges:
@@ -714,7 +744,19 @@ def validate_edges_post_build(edges, debug=False):
         else:
             invalid_edges += 1
             if debug:
-                print(f"[DEBUG] Invalid edge: start='{start_id}', end='{end_id}', kind='{kind}'")
+                print(f"[DEBUG] Invalid edge detected: start='{start_id}', end='{end_id}', kind='{kind}'")
+                    # --- DEBUG PATCH: print missing node edges ---
+                if actual_start not in graph.nodes or actual_end not in graph.nodes:
+                    print(
+                        f"[DEBUG][EDGE SKIP] Edge #{i}: {start_id} ({actual_start}) --[{edge_data.get('kind','RelatedTo')}]--> {end_id} ({actual_end})"
+                    )
+                    if actual_start not in graph.nodes:
+                        print(f"  [DEBUG] MISSING NODE: start ({actual_start}) not in graph.nodes")
+                    if actual_end not in graph.nodes:
+                        print(f"  [DEBUG] MISSING NODE: end ({actual_end}) not in graph.nodes")
+                    # Optional: print all graph.nodes for investigation
+                    # print('Known nodes:', list(graph.nodes.keys()))
+                    continue
     print(f"[+] Edge validation summary: {valid_edges} valid, {invalid_edges} invalid")
     return valid_edges, invalid_edges
 
@@ -725,7 +767,7 @@ def get_edge_statistics(edges):
     risk_levels = {}
     for edge in edges:
         kind = edge.get('kind', 'Unknown')
-        risk = edge.get('properties', {}).get('risklevel', 'Unknown')
+        risk = edge.get('properties', {}).get('riskLevel', 'Unknown')
         edge_kinds[kind] = edge_kinds.get(kind, 0) + 1
         risk_levels[risk] = risk_levels.get(risk, 0) + 1
     print(f"[+] Edge Statistics:")
